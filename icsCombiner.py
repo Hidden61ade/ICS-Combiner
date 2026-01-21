@@ -2,6 +2,8 @@ import os
 import re
 from datetime import datetime, timedelta
 from collections import defaultdict
+import tkinter as tk
+from tkinter import filedialog, messagebox
 
 def parse_ics_file(file_path):
     """Parse ICS file and extract event information"""
@@ -94,7 +96,7 @@ def expand_recurring_events(events, weeks=16):
     
     return expanded_events
 
-def print_weekly_schedule(events):
+def print_weekly_schedule(events, max_weeks=None):
     """Print a formatted weekly schedule"""
     if not events:
         print("No events found")
@@ -118,8 +120,12 @@ def print_weekly_schedule(events):
     
     days_order = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
     
-    # Show first few weeks
-    for week in sorted(schedule.keys())[:4]:  # Show first 4 weeks
+    # Show all weeks by default
+    weeks = sorted(schedule.keys())
+    if max_weeks is not None:
+        weeks = weeks[:max_weeks]
+
+    for week in weeks:
         print(f"\n📚 WEEK {week}")
         print("-" * 50)
         
@@ -182,7 +188,12 @@ METHOD:PUBLISH
     
     for event in events:
         ics_content += "BEGIN:VEVENT\n"
-        ics_content += f"UID:{event.get('uid', f'event-{hash(str(event))}')}@ics-combiner\n"
+        uid = event.get('uid')
+        if uid:
+            uid = f"{uid}-{event['start'].strftime('%Y%m%dT%H%M%S')}"
+        else:
+            uid = f"event-{hash(str(event))}"
+        ics_content += f"UID:{uid}@ics-combiner\n"
         ics_content += f"DTSTART:{event['start'].strftime('%Y%m%dT%H%M%S')}\n"
         ics_content += f"DTEND:{event['end'].strftime('%Y%m%dT%H%M%S')}\n"
         ics_content += f"SUMMARY:{event.get('summary', 'Event')}\n"
@@ -196,66 +207,120 @@ METHOD:PUBLISH
     with open(output_path, 'w', encoding='utf-8') as f:
         f.write(ics_content)
 
-def main():
-    path = input("Enter the path to your ICS files: ").strip()
-    
+def combine_ics(path, max_weeks=None):
     if not os.path.exists(path):
-        print(f"❌ Path not found: {path}")
-        return
-    
-    print(f"� Looking for ICS files in: {path}")
-    
+        return False, f"❌ Path not found: {path}"
+
+    log_lines = []
+    log_lines.append(f"🔍 Looking for ICS files in: {path}")
+
     # Find all ICS files
     ics_files = [f for f in os.listdir(path) if f.lower().endswith('.ics') and f != 'combined.ics']
-    print(f"📂 Found {len(ics_files)} ICS files")
-    
+    log_lines.append(f"📂 Found {len(ics_files)} ICS files")
+
     if not ics_files:
-        print("❌ No ICS files found in the specified directory")
-        return
-    
+        return False, "❌ No ICS files found in the specified directory"
+
     all_events = []
-    
+
     # Parse each file
     for filename in ics_files:
         file_path = os.path.join(path, filename)
         events = parse_ics_file(file_path)
-        print(f"� {filename}: {len(events)} events")
+        log_lines.append(f"📄 {filename}: {len(events)} events")
         all_events.extend(events)
-    
-    print(f"\n📊 Total base events: {len(all_events)}")
-    
+
+    log_lines.append(f"\n📊 Total base events: {len(all_events)}")
+
     if not all_events:
-        print("❌ No events found in any files")
-        return
-    
+        return False, "❌ No events found in any files"
+
     # Expand recurring events
     expanded_events = expand_recurring_events(all_events)
-    print(f"📊 Total events (including recurring): {len(expanded_events)}")
-    
-    # Print schedule
-    print_weekly_schedule(expanded_events)
-    
+    log_lines.append(f"📊 Total events (including recurring): {len(expanded_events)}")
+
     # Check for conflicts
     conflicts = check_conflicts(expanded_events)
     if conflicts:
-        print(f"\n⚠️  WARNING: {len(conflicts)} scheduling conflicts found!")
-        print("="*50)
+        log_lines.append(f"\n⚠️  WARNING: {len(conflicts)} scheduling conflicts found!")
+        log_lines.append("="*50)
         for i, (e1, e2) in enumerate(conflicts[:5], 1):  # Show first 5 conflicts
-            print(f"{i}. {e1['summary']} vs {e2['summary']}")
-            print(f"   📅 {e1['start'].strftime('%Y-%m-%d %H:%M')} - {e1['end'].strftime('%H:%M')}")
-            print(f"   📅 {e2['start'].strftime('%Y-%m-%d %H:%M')} - {e2['end'].strftime('%H:%M')}")
-            print()
+            log_lines.append(f"{i}. {e1['summary']} vs {e2['summary']}")
+            log_lines.append(f"   📅 {e1['start'].strftime('%Y-%m-%d %H:%M')} - {e1['end'].strftime('%H:%M')}")
+            log_lines.append(f"   📅 {e2['start'].strftime('%Y-%m-%d %H:%M')} - {e2['end'].strftime('%H:%M')}")
+            log_lines.append("")
         if len(conflicts) > 5:
-            print(f"   ... and {len(conflicts) - 5} more conflicts")
-        print("\n⚠️  Please resolve conflicts before combining calendars.")
-    else:
-        print(f"\n✅ No scheduling conflicts detected!")
-        
-        # Create combined ICS file
-        output_path = os.path.join(path, "combined.ics")
-        create_combined_ics(all_events, output_path)  # Use base events, not expanded
-        print(f"💾 Combined calendar saved to: {output_path}")
-        print(f"📦 Combined file contains {len(all_events)} base events (recurring events will be expanded by your calendar app)")
+            log_lines.append(f"   ... and {len(conflicts) - 5} more conflicts")
+        log_lines.append("\n⚠️  Please resolve conflicts before combining calendars.")
+        return False, "\n".join(log_lines)
+
+    # Create combined ICS file (expanded events for full semester)
+    output_path = os.path.join(path, "combined.ics")
+    create_combined_ics(expanded_events, output_path)
+    log_lines.append(f"\n✅ No scheduling conflicts detected!")
+    log_lines.append(f"💾 Combined calendar saved to: {output_path}")
+    log_lines.append(f"📦 Combined file contains {len(expanded_events)} events (expanded for full semester)")
+
+    if max_weeks is None:
+        log_lines.append("\n(Full schedule printed in console mode only.)")
+    return True, "\n".join(log_lines)
+
+
+def run_gui():
+    root = tk.Tk()
+    root.title("ICS Combiner")
+    root.geometry("720x520")
+
+    path_var = tk.StringVar()
+
+    def browse_folder():
+        folder = filedialog.askdirectory()
+        if folder:
+            path_var.set(folder)
+
+    def run_combine():
+        path = path_var.get().strip()
+        if not path:
+            messagebox.showwarning("Missing Path", "Please select a folder containing .ics files.")
+            return
+        ok, output = combine_ics(path)
+        output_text.delete("1.0", tk.END)
+        output_text.insert(tk.END, output)
+        if ok:
+            messagebox.showinfo("Done", "Combined calendar created successfully.")
+        else:
+            messagebox.showwarning("Issue", "Conflicts detected or no events found. See details below.")
+
+    header = tk.Label(root, text="ICS Combiner", font=("Segoe UI", 16, "bold"))
+    header.pack(pady=10)
+
+    frame = tk.Frame(root)
+    frame.pack(fill=tk.X, padx=12)
+
+    path_entry = tk.Entry(frame, textvariable=path_var)
+    path_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+    browse_btn = tk.Button(frame, text="Browse", command=browse_folder)
+    browse_btn.pack(side=tk.LEFT, padx=8)
+
+    run_btn = tk.Button(root, text="Combine", command=run_combine)
+    run_btn.pack(pady=10)
+
+    output_text = tk.Text(root, wrap=tk.WORD)
+    output_text.pack(fill=tk.BOTH, expand=True, padx=12, pady=8)
+
+    root.mainloop()
+
+
+def main():
+    path = input("Enter the path to your ICS files (or press Enter for GUI): ").strip()
+
+    if not path:
+        run_gui()
+        return
+
+    ok, output = combine_ics(path)
+    print(output)
 
 if __name__ == "__main__":
     main()
